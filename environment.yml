@@ -1,0 +1,48 @@
+name: miniVLA
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+
+dependencies:
+  # Python version
+  - python=3.10
+
+  - pip:
+    # Core deep learning
+    - torch==2.3.0
+    - torchvision==0.18.0   # required for ResNet18 backbone (v3)
+    - torchaudio==2.3.0
+
+    # Data & utilities
+    - numpy==1.26.4
+    - scipy
+    - einops
+    - tqdm
+    - h5py
+
+    # Experiment tracking
+    - wandb
+    - tensorboard
+
+    # Config management
+    - omegaconf
+    - hydra-core
+
+    # Simulation (LIBERO)
+    - robosuite==1.4.0
+    - gymnasium
+    - bddl
+    - easydict
+    - matplotlib
+    - gym
+
+    # Code quality
+    - black
+    - pytest
+
+    # Others
+    - transformers    # CLIPTokenizer
+    - pyyaml
+    - termcolor
+    - mujoco==2.3.7
