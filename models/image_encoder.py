@@ -91,12 +91,25 @@ class ResNetSpatialEncoder(nn.Module):
         #   )
         #
         # Verify: backbone(torch.zeros(1,3,128,128)).shape  → should be [1, 512, 4, 4]
-        raise NotImplementedError("TODO 1: build self.backbone")
+        # raise NotImplementedError("TODO 1: build self.backbone")
+        
+        base = models.resnet18(pretrained=pretrained)
+        self.backbone = nn.Sequential(
+                base.conv1, base.bn1, base.relu, base.maxpool,
+                base.layer1, base.layer2, base.layer3, base.layer4, 
+        )
+        #layer1,2,3,4 such module network build with sequential
+        # [B, 512, 4, 4]
 
+        print(self.backbone(torch.zeros(1,3,128,128)).shape)
         # ── TODO 2: 1×1 Conv projection: 512 → embed_dim ─────────────────────
         # Maps ResNet’s 512-channel feature map to the model’s working dimension.
         # Hint: nn.Conv2d(self.RESNET_CHANNELS, embed_dim, kernel_size=1)
-        raise NotImplementedError("TODO 2: define self.proj")
+        # raise NotImplementedError("TODO 2: define self.proj")
+        
+        
+        self.proj = nn.Conv2d(self.RESNET_CHANNELS, embed_dim, kernel_size=1)
+        # [B, 256, 4, 4]
 
         # ── TODO 3: Learnable 2D positional encoding ──────────────────────────
         # Each of the 4×4=16 spatial patches needs a unique position signal.
@@ -111,24 +124,30 @@ class ResNetSpatialEncoder(nn.Module):
         #   col part: self.col_embed.unsqueeze(0).expand(H, W, D/2)  → [4, 4, D/2]
         #   concat on dim=-1  → [4, 4, D]  then reshape to [16, D]
         #   unsqueeze(0)      → [1, 16, D]  (broadcasts over batch)
-        raise NotImplementedError("TODO 3: define self.row_embed and self.col_embed")
+        # raise NotImplementedError("TODO 3: define self.row_embed and self.col_embed")
+        
+        self.row_embed = nn.Parameter(torch.randn(self.H_FEAT, embed_dim // 2))
+        self.col_embed = nn.Parameter(torch.randn(self.W_FEAT, embed_dim // 2))
+
 
         # ── TODO 4: LayerNorm on token sequence ──────────────────────────────
         # Applied after adding positional encoding, before spatial attention.
         # Hint: nn.LayerNorm(embed_dim)
-        raise NotImplementedError("TODO 4: define self.norm")
-
+        # raise NotImplementedError("TODO 4: define self.norm")
+        self.norm = nn.LayerNorm(embed_dim)
+        
         # ── TODO 5: Within-camera TransformerEncoder (local spatial attention) 
         # This lets the model understand relationships WITHIN one camera view
         # (e.g. gripper relative to bowl) before tokens enter ObservationEncoder.
         # Use 2 layers, nhead=4, dim_feedforward=4*embed_dim, batch_first=True.
         #
-        #   spatial_layer = nn.TransformerEncoderLayer(
-        #       d_model=embed_dim, nhead=4,
-        #       dim_feedforward=4*embed_dim, dropout=0.1, batch_first=True,
-        #   )
-        #   self.spatial_encoder = nn.TransformerEncoder(spatial_layer, num_layers=2)
-        raise NotImplementedError("TODO 5: define self.spatial_encoder")
+        spatial_layer = nn.TransformerEncoderLayer(
+            d_model=embed_dim, nhead=4,
+            dim_feedforward=4*embed_dim, dropout=0.1, batch_first=True,
+        )
+        self.spatial_encoder = nn.TransformerEncoder(spatial_layer, num_layers=2)
+        
+        # raise NotImplementedError("TODO 5: define self.spatial_encoder")
 
     def _build_pos_encoding(self) -> torch.Tensor:
         """
@@ -144,8 +163,14 @@ class ResNetSpatialEncoder(nn.Module):
           C. torch.cat([row_part, col_part], dim=-1)   → [H, W, D]
           D. .reshape(H*W, D).unsqueeze(0)             → [1, H*W, D]
         """
-        raise NotImplementedError("TODO 6: implement _build_pos_encoding")
-
+        # raise NotImplementedError("TODO 6: implement _build_pos_encoding")
+        
+        self.row_embed = self.row_embed.unsqueeze(1).expand(-1, self.W_FEAT, -1)
+        self.col_embed = self.row_embed.unsqueeze(0).expand(self.H_FEAT, -1, -1)
+        concatFeature = torch.cat([self.row_embed,self.col_embed], dim=1)
+        concatFeature = concatFeature.reshape(self.row_embed*self.col_embed, self.embed_dim).unsqueeze(0) 
+        return concatFeature
+    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
@@ -166,47 +191,48 @@ class ResNetSpatialEncoder(nn.Module):
           F. attended = self.spatial_encoder(tokens)          # [B, 16, D]
           G. return attended.mean(dim=1)                      # [B, D]  mean pool
         """
-        raise NotImplementedError("TODO 7: implement forward")
-
+        # raise NotImplementedError("TODO 7: implement forward")
+        
+        featureMap = self.backbone(x)
+        projectedFeature = self.proj(featureMap)
+        tokens = projectedFeature.flatten(2).permute(0, 2, 1)
+        pos = self._build_pos_encoding() 
+        tokens   = self.norm(tokens + pos)  
+        attended = self.spatial_encoder(tokens)  
+        return attended.mean(dim=1)
+    
     # ── Freeze control ───────────────────────────────────────────────────────
 
-    def freeze_all(self) -> None:
-        """
-        TODO 8: Freeze the entire ResNet backbone.
-        Only self.backbone parameters are frozen —
-        proj, row_embed, col_embed, norm, spatial_encoder remain trainable.
+def freeze_all(self) -> None:
+    """
+    TODO 8: Freeze the entire ResNet backbone.
+    Only self.backbone parameters are frozen —
+    proj, row_embed, col_embed, norm, spatial_encoder remain trainable.
 
-        Call this at the START of training.
+    Call this at the START of training.
+    """
+    for p in self.backbone.parameters():
+        p.requires_grad = False
 
-        Hint:
-            for p in self.backbone.parameters():
-                p.requires_grad = False
-        """
-        raise NotImplementedError("TODO 8: implement freeze_all")
 
-    def unfreeze_last_layer(self) -> None:
-        """
-        TODO 9: Unfreeze backbone.layer4 only (the last residual block).
-        First freeze everything via freeze_all(), then selectively unfreeze layer4.
+def unfreeze_last_layer(self) -> None:
+    """
+    TODO 9: Unfreeze backbone.layer4 only (the last residual block).
+    First freeze everything via freeze_all(), then selectively unfreeze layer4.
 
-        Call this after a few warmup epochs (Stage 2 of training).
+    Call this after a few warmup epochs (Stage 2 of training).
+    """
+    self.freeze_all()
+    for p in self.backbone[-1].parameters():  # backbone[-1] is layer4
+        p.requires_grad = True
 
-        Hint:
-            self.freeze_all()
-            for p in self.backbone[-1].parameters():  # backbone[-1] is layer4
-                p.requires_grad = True
-        """
-        raise NotImplementedError("TODO 9: implement unfreeze_last_layer")
 
-    def unfreeze_all(self) -> None:
-        """
-        TODO 10: Unfreeze the entire backbone for full fine-tuning.
-        Use with a reduced LR (e.g. 1e-5) to avoid destroying pretrained features.
+def unfreeze_all(self) -> None:
+    """
+    TODO 10: Unfreeze the entire backbone for full fine-tuning.
+    Use with a reduced LR (e.g. 1e-5) to avoid destroying pretrained features.
 
-        Call this in the final training stage (Stage 3).
-
-        Hint:
-            for p in self.backbone.parameters():
-                p.requires_grad = True
-        """
-        raise NotImplementedError("TODO 10: implement unfreeze_all")
+    Call this in the final training stage (Stage 3).
+    """
+    for p in self.backbone.parameters():
+        p.requires_grad = True
