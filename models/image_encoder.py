@@ -165,10 +165,10 @@ class ResNetSpatialEncoder(nn.Module):
         """
         # raise NotImplementedError("TODO 6: implement _build_pos_encoding")
         
-        self.row_embed = self.row_embed.unsqueeze(1).expand(-1, self.W_FEAT, -1)
-        self.col_embed = self.row_embed.unsqueeze(0).expand(self.H_FEAT, -1, -1)
-        concatFeature = torch.cat([self.row_embed,self.col_embed], dim=1)
-        concatFeature = concatFeature.reshape(self.row_embed*self.col_embed, self.embed_dim).unsqueeze(0) 
+        row_embed = self.row_embed.unsqueeze(1).expand(-1, self.W_FEAT, -1)
+        col_embed = self.col_embed.unsqueeze(0).expand(self.H_FEAT, -1, -1)
+        concatFeature = torch.cat([row_embed,col_embed], dim=-1)
+        concatFeature = concatFeature.reshape(1,self.H_FEAT * self.W_FEAT,self.embed_dim,)
         return concatFeature
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -203,36 +203,36 @@ class ResNetSpatialEncoder(nn.Module):
     
     # ── Freeze control ───────────────────────────────────────────────────────
 
-def freeze_all(self) -> None:
-    """
-    TODO 8: Freeze the entire ResNet backbone.
-    Only self.backbone parameters are frozen —
-    proj, row_embed, col_embed, norm, spatial_encoder remain trainable.
+    def freeze_all(self) -> None:
+        """
+        TODO 8: Freeze the entire ResNet backbone.
+        Only self.backbone parameters are frozen —
+        proj, row_embed, col_embed, norm, spatial_encoder remain trainable.
 
-    Call this at the START of training.
-    """
-    for p in self.backbone.parameters():
-        p.requires_grad = False
-
-
-def unfreeze_last_layer(self) -> None:
-    """
-    TODO 9: Unfreeze backbone.layer4 only (the last residual block).
-    First freeze everything via freeze_all(), then selectively unfreeze layer4.
-
-    Call this after a few warmup epochs (Stage 2 of training).
-    """
-    self.freeze_all()
-    for p in self.backbone[-1].parameters():  # backbone[-1] is layer4
-        p.requires_grad = True
+        Call this at the START of training.
+        """
+        for p in self.backbone.parameters():
+            p.requires_grad = False
 
 
-def unfreeze_all(self) -> None:
-    """
-    TODO 10: Unfreeze the entire backbone for full fine-tuning.
-    Use with a reduced LR (e.g. 1e-5) to avoid destroying pretrained features.
+    def unfreeze_last_layer(self) -> None:
+        """
+        TODO 9: Unfreeze backbone.layer4 only (the last residual block).
+        First freeze everything via freeze_all(), then selectively unfreeze layer4.
 
-    Call this in the final training stage (Stage 3).
-    """
-    for p in self.backbone.parameters():
-        p.requires_grad = True
+        Call this after a few warmup epochs (Stage 2 of training).
+        """
+        self.freeze_all()
+        for p in self.backbone[-1].parameters():  # backbone[-1] is layer4
+            p.requires_grad = True
+
+
+    def unfreeze_all(self) -> None:
+        """
+        TODO 10: Unfreeze the entire backbone for full fine-tuning.
+        Use with a reduced LR (e.g. 1e-5) to avoid destroying pretrained features.
+
+        Call this in the final training stage (Stage 3).
+        """
+        for p in self.backbone.parameters():
+            p.requires_grad = True

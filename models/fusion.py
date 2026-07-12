@@ -71,28 +71,28 @@ class ObservationEncoder(nn.Module):
         # Note: agentview and wrist share ONE camera_embedding (same modality type).
         # State, text, and task each have their own.
         #
-        #   self.camera_embedding = nn.Parameter(torch.randn(dim_model))
-        #   self.state_embedding  = nn.Parameter(torch.randn(dim_model))
-        #   self.text_embedding   = nn.Parameter(torch.randn(dim_model))
-        #   self.task_embedding   = nn.Parameter(torch.randn(dim_model))
-        raise NotImplementedError("TODO 1: define four per-modality embedding parameters")
+        self.camera_embedding = nn.Parameter(torch.randn(dim_model))
+        self.state_embedding  = nn.Parameter(torch.randn(dim_model))
+        self.text_embedding   = nn.Parameter(torch.randn(dim_model))
+        self.task_embedding   = nn.Parameter(torch.randn(dim_model))
+        # raise NotImplementedError("TODO 1: define four per-modality embedding parameters")
 
         # ── TODO 2: TransformerEncoder for cross-modal attention ──────────────
         # Same structure as v2 TransformerFusion — just handles 5 tokens instead of 4.
-        #   encoder_layer = nn.TransformerEncoderLayer(
-        #       d_model=dim_model, nhead=nhead,
-        #       dim_feedforward=4*dim_model, dropout=0.1, batch_first=True,
-        #   )
-        #   self.encoder = nn.TransformerEncoder(encoder_layer, num_layers)
-        raise NotImplementedError("TODO 2: define self.encoder")
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=dim_model, nhead=nhead,
+            dim_feedforward=4*dim_model, dropout=0.1, batch_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers)
+        # raise NotImplementedError("TODO 2: define self.encoder")
 
         # ── TODO 3: Output projection (same as v2) ────────────────────────────
         # Linear + LayerNorm applied to the mean-pooled summary.
-        #   self.out_proj = nn.Sequential(
-        #       nn.Linear(dim_model, dim_model),
-        #       nn.LayerNorm(dim_model),
-        #   )
-        raise NotImplementedError("TODO 3: define self.out_proj")
+        self.out_proj = nn.Sequential(
+            nn.Linear(dim_model, dim_model),
+            nn.LayerNorm(dim_model),
+        )
+        # raise NotImplementedError("TODO 3: define self.out_proj")
 
     def forward(
         self,
@@ -129,4 +129,18 @@ class ObservationEncoder(nn.Module):
 
           E. Return (memory_tokens, obs_summary)
         """
-        raise NotImplementedError("TODO 4: implement ObservationEncoder.forward")
+        # raise NotImplementedError("TODO 4: implement ObservationEncoder.forward")
+        img_feat   = img_feat   + self.camera_embedding.unsqueeze(0)  # [B, D]
+        wrist_feat = wrist_feat + self.camera_embedding.unsqueeze(0)
+        state_feat = state_feat + self.state_embedding.unsqueeze(0)
+        txt_feat   = txt_feat   + self.text_embedding.unsqueeze(0)
+        task_feat  = task_feat  + self.task_embedding.unsqueeze(0)
+        
+        tokens = torch.stack([img_feat, wrist_feat, state_feat, txt_feat, task_feat], dim=1)
+        
+        memory_tokens = self.encoder(tokens)
+        
+        fused = memory_tokens.mean(dim=1)
+        obs_summary = self.out_proj(fused)
+        
+        return memory_tokens, obs_summary

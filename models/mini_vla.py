@@ -56,36 +56,36 @@ class MiniVLA(nn.Module):
         # --- Image encoders (pretrained ResNet18, independent weights) ---
         # TODO 1: Replace SmallImageEncoder with ResNetSpatialEncoder.
         # Same pattern as v2 — two instances, different weights.
-        #   self.image_encoder = ResNetSpatialEncoder(embed_dim=dim_model, pretrained=pretrained_backbone)
-        #   self.wrist_encoder = ResNetSpatialEncoder(embed_dim=dim_model, pretrained=pretrained_backbone)
-        raise NotImplementedError("TODO 1: instantiate image_encoder and wrist_encoder")
+        self.image_encoder = ResNetSpatialEncoder(embed_dim=dim_model, pretrained=pretrained_backbone)
+        self.wrist_encoder = ResNetSpatialEncoder(embed_dim=dim_model, pretrained=pretrained_backbone)
+        # raise NotImplementedError("TODO 1: instantiate image_encoder and wrist_encoder")
 
         # --- Other encoders (unchanged from v2) ---
         # TODO 2: Instantiate state_encoder and text_encoder exactly as in v2.
-        #   self.state_encoder = StateEncoder(state_dim=state_dim, embed_dim=dim_model)
-        #   self.text_encoder  = TextEncoder(vocab_size=vocab_size, embed_dim=dim_model)
-        raise NotImplementedError("TODO 2: instantiate state_encoder and text_encoder")
+        self.state_encoder = StateEncoder(state_dim=state_dim, embed_dim=dim_model)
+        self.text_encoder  = TextEncoder(vocab_size=vocab_size, embed_dim=dim_model)
+        # raise NotImplementedError("TODO 2: instantiate state_encoder and text_encoder")
 
         # --- Task encoder (NEW in v3) ---
         # TODO 3: Instantiate task_encoder.
-        #   self.task_encoder = TaskEncoder(num_tasks=num_tasks, embed_dim=dim_model)
-        raise NotImplementedError("TODO 3: instantiate task_encoder")
+        self.task_encoder = TaskEncoder(num_tasks=num_tasks, embed_dim=dim_model)
+        # raise NotImplementedError("TODO 3: instantiate task_encoder")
 
         # --- Observation encoder (replaces TransformerFusion) ---
         # TODO 4: Instantiate ObservationEncoder.
         # Note: no num_tokens argument needed — ObservationEncoder always uses 5 tokens.
-        #   self.obs_encoder = ObservationEncoder(
-        #       dim_model=dim_model, nhead=nhead, num_layers=fusion_layers,
-        #   )
-        raise NotImplementedError("TODO 4: instantiate obs_encoder")
+        self.obs_encoder = ObservationEncoder(
+            dim_model=dim_model, nhead=nhead, num_layers=fusion_layers,
+        )
+        # raise NotImplementedError("TODO 4: instantiate obs_encoder")
 
         # --- Action head (unchanged from v2) ---
         # TODO 5: Instantiate action_head exactly as in v2.
-        #   self.action_head = ActionQueryDecoder(
-        #       dim_model=dim_model, chunk_size=chunk_size,
-        #       action_dim=action_dim, nhead=nhead, num_layers=decoder_layers,
-        #   )
-        raise NotImplementedError("TODO 5: instantiate action_head")
+        self.action_head = ActionQueryDecoder(
+            dim_model=dim_model, chunk_size=chunk_size,
+            action_dim=action_dim, nhead=nhead, num_layers=decoder_layers,
+        )
+        # raise NotImplementedError("TODO 5: instantiate action_head")
 
     def forward(
         self,
@@ -113,7 +113,17 @@ class MiniVLA(nn.Module):
           G. actions = self.action_head(memory_tokens)        # [B, 16, 7]
           H. return actions
         """
-        raise NotImplementedError("TODO 6: implement MiniVLA.forward")
+        # raise NotImplementedError("TODO 6: implement MiniVLA.forward")
+        img_feat   = self.image_encoder(image)           # [B, D]
+        wrist_feat = self.wrist_encoder(wrist_image)     # [B, D]
+        state_feat = self.state_encoder(state)           # [B, D]
+        txt_feat   = self.text_encoder(tokens, mask)     # [B, D]
+        task_feat  = self.task_encoder(task_idx)         # [B, D]  NEW
+        memory_tokens, _ = self.obs_encoder(
+            img_feat, wrist_feat, state_feat, txt_feat, task_feat
+        )                                                # [B, 5, D]
+        actions = self.action_head(memory_tokens)        # [B, 16, 7]
+        return actions
 
     def count_parameters(self) -> int:
         return sum(p.numel() for p in self.parameters() if p.requires_grad)

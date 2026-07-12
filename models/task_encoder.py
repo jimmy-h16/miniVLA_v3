@@ -38,14 +38,15 @@ class TaskEncoder(nn.Module):
         # One embedding vector per task, dimension = embed_dim.
         # Hint: nn.Embedding(num_tasks, embed_dim)
         # self.embedding = ...
-        raise NotImplementedError("TaskEncoder.__init__: define self.embedding")
+        # raise NotImplementedError("TaskEncoder.__init__: define self.embedding")
+        self.taskEmbed = nn.Embedding(num_tasks, embed_dim)
 
         # TODO 2: Define an output projection (optional but consistent with other encoders)
         # A single Linear layer: embed_dim → embed_dim
         # This gives the task token its own learnable projection like state/text encoders.
         # self.proj = ...
-        raise NotImplementedError("TaskEncoder.__init__: define self.proj")
-
+        # raise NotImplementedError("TaskEncoder.__init__: define self.proj")
+        self.proj = nn.Linear(embed_dim,embed_dim)
     def forward(self, task_idx: torch.Tensor) -> torch.Tensor:
         """
         Args:
@@ -57,4 +58,8 @@ class TaskEncoder(nn.Module):
         # Step A: look up embedding for each task_idx  → [B, embed_dim]
         # Step B: pass through self.proj              → [B, embed_dim]
         # Hint: self.embedding(task_idx.long())
-        raise NotImplementedError("TaskEncoder.forward: implement lookup + projection")
+        # raise NotImplementedError("TaskEncoder.forward: implement lookup + projection")
+        x = self.taskEmbed(task_idx.long())
+        x = self.proj(x)
+        return x
+        

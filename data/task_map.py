@@ -15,26 +15,28 @@
 # IMPORTANT: LIBERO_SUITE must match the suite you're training on.
 #   Switch to "libero_90" if you move to the full 90-task benchmark.
 
-LIBERO_SUITE = "libero_10"
+# LIBERO_SUITE = "libero_10"
 
 # Canonical ordered list — copied verbatim from:
 #   Lifelong-Robot-Learning/LIBERO: libero/libero/benchmark/libero_suite_task_map.py
 # DO NOT reorder. Indices are baked into saved checkpoints.
-LIBERO_10_TASKS = [
-    "LIVING_ROOM_SCENE2_put_both_the_alphabet_soup_and_the_tomato_sauce_in_the_basket",
-    "LIVING_ROOM_SCENE2_put_both_the_cream_cheese_box_and_the_butter_in_the_basket",
-    "KITCHEN_SCENE3_turn_on_the_stove_and_put_the_moka_pot_on_it",
-    "KITCHEN_SCENE4_put_the_black_bowl_in_the_bottom_drawer_of_the_cabinet_and_close_it",
-    "LIVING_ROOM_SCENE5_put_the_white_mug_on_the_left_plate_and_put_the_yellow_and_white_mug_on_the_right_plate",
-    "STUDY_SCENE1_pick_up_the_book_and_place_it_in_the_back_compartment_of_the_caddy",
-    "LIVING_ROOM_SCENE6_put_the_white_mug_on_the_plate_and_put_the_chocolate_pudding_to_the_right_of_the_plate",
-    "LIVING_ROOM_SCENE1_put_both_the_alphabet_soup_and_the_cream_cheese_box_in_the_basket",
-    "KITCHEN_SCENE8_put_both_moka_pots_on_the_stove",
-    "KITCHEN_SCENE6_put_the_yellow_and_white_mug_in_the_microwave_and_close_it",
+LIBERO_SUITE = "libero_spatial"
+
+LIBERO_SPATIAL_TASKS = [
+    "pick_up_the_black_bowl_between_the_plate_and_the_ramekin_and_place_it_on_the_plate",
+    "pick_up_the_black_bowl_next_to_the_ramekin_and_place_it_on_the_plate",
+    "pick_up_the_black_bowl_from_table_center_and_place_it_on_the_plate",
+    "pick_up_the_black_bowl_on_the_cookie_box_and_place_it_on_the_plate",
+    "pick_up_the_black_bowl_in_the_top_drawer_of_the_wooden_cabinet_and_place_it_on_the_plate",
+    "pick_up_the_black_bowl_on_the_ramekin_and_place_it_on_the_plate",
+    "pick_up_the_black_bowl_next_to_the_cookie_box_and_place_it_on_the_plate",
+    "pick_up_the_black_bowl_on_the_stove_and_place_it_on_the_plate",
+    "pick_up_the_black_bowl_next_to_the_plate_and_place_it_on_the_plate",
+    "pick_up_the_black_bowl_on_the_wooden_cabinet_and_place_it_on_the_plate",
 ]
 
 _SUITE_MAP = {
-    "libero_10": LIBERO_10_TASKS,
+    "libero_spatial": LIBERO_SPATIAL_TASKS,
 }
 
 _task_list = _SUITE_MAP[LIBERO_SUITE]
