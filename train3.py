@@ -15,13 +15,18 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from data.task_map import NUM_TASKS, LIBERO_SUITE
 
 from models.mini_vla    import MiniVLA
 from data.libero_dataset import LiberoDataset
 from data.task_map      import NUM_TASKS
 
 # ── Config ────────────────────────────────────────────────────────────────
-DATA_DIR      = "./data/libero_10"     # path to your .hdf5 demo files
+# DATA_DIR      = "./data/libero_10"     # path to your .hdf5 demo files
+
+DATA_DIR  = os.environ.get("LIBERO_DATASET_DIR", os.path.expanduser("~/.robosuite/datasets/datasets/libero_spatial"))
+all_hdf5 = sorted(glob.glob(os.path.join(DATA_DIR, "*.hdf5")))
+
 CHECKPOINT_DIR = "./checkpoints"
 NUM_EPOCHS    = 100
 BATCH_SIZE    = 64
@@ -69,11 +74,11 @@ train_ds, val_ds = random_split(full_dataset, [train_size, val_size])
 
 train_loader = DataLoader(
     train_ds, batch_size=BATCH_SIZE, shuffle=True,
-    num_workers=4, pin_memory=(DEVICE.type == "cuda"),
+    num_workers=0, pin_memory=(DEVICE.type == "cuda"),
 )
 val_loader = DataLoader(
     val_ds, batch_size=BATCH_SIZE, shuffle=False,
-    num_workers=4, pin_memory=(DEVICE.type == "cuda"),
+    num_workers=0, pin_memory=(DEVICE.type == "cuda"),
 )
 print(f"[train3] Train: {len(train_ds)} samples | Val: {len(val_ds)} samples")
 

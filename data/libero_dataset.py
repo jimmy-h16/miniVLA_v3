@@ -86,9 +86,11 @@ class LiberoDataset(Dataset):
             agentview   = load_image("agentview_rgb")
             eye_in_hand = load_image("eye_in_hand_rgb")
 
-            robot_state = torch.from_numpy(
-                ep["obs"]["robot0_eef_pos"][t].astype(np.float32)
-            )  # shape depends on state_dim in your dataset
+            eef_pos = ep["obs"]["ee_pos"][t]            # [3]
+            eef_ori = ep["obs"]["ee_ori"][t]            # [3]
+            gripper = ep["obs"]["gripper_states"][t]    # [2]
+            state   = np.concatenate([eef_pos, eef_ori, gripper])  # [8]
+            state   = torch.from_numpy(state).float()
 
             # ── Action chunk [t : t + chunk_size] ─────────────────────────
             end = min(t + self.chunk_size, T)
@@ -108,7 +110,7 @@ class LiberoDataset(Dataset):
         return {
             "agentview_rgb":   agentview,    # [3, H, W]
             "eye_in_hand_rgb": eye_in_hand,  # [3, H, W]
-            "robot_state":     robot_state,  # [state_dim]
+            "robot_state":     state,  # [state_dim]
             "action_chunk":    action_chunk, # [chunk_size, action_dim]
             "action_mask":     action_mask,  # [chunk_size]
             "task_idx":        task_idx,     # int  (stable, suite-based)
