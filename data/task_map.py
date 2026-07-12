@@ -23,16 +23,16 @@
 LIBERO_SUITE = "libero_spatial"
 
 LIBERO_SPATIAL_TASKS = [
-    "pick_up_the_black_bowl_between_the_plate_and_the_ramekin_and_place_it_on_the_plate",
-    "pick_up_the_black_bowl_next_to_the_ramekin_and_place_it_on_the_plate",
-    "pick_up_the_black_bowl_from_table_center_and_place_it_on_the_plate",
-    "pick_up_the_black_bowl_on_the_cookie_box_and_place_it_on_the_plate",
-    "pick_up_the_black_bowl_in_the_top_drawer_of_the_wooden_cabinet_and_place_it_on_the_plate",
-    "pick_up_the_black_bowl_on_the_ramekin_and_place_it_on_the_plate",
-    "pick_up_the_black_bowl_next_to_the_cookie_box_and_place_it_on_the_plate",
-    "pick_up_the_black_bowl_on_the_stove_and_place_it_on_the_plate",
-    "pick_up_the_black_bowl_next_to_the_plate_and_place_it_on_the_plate",
-    "pick_up_the_black_bowl_on_the_wooden_cabinet_and_place_it_on_the_plate",
+"pick up the black bowl between the plate and the ramekin and place it on the plate",
+"pick up the black bowl next to the ramekin and place it on the plate",
+"pick up the black bowl from table center and place it on the plate",
+"pick up the black bowl on the cookie box and place it on the plate",
+"pick up the black bowl in the top drawer of the wooden cabinet and place it on the plate",
+"pick up the black bowl on the ramekin and place it on the plate",
+"pick up the black bowl next to the cookie box and place it on the plate",
+"pick up the black bowl on the stove and place it on the plate",
+"pick up the black bowl next to the plate and place it on the plate",
+"pick up the black bowl on the wooden cabinet and place it on the plate",
 ]
 
 _SUITE_MAP = {
@@ -61,6 +61,7 @@ def get_task_idx(instruction: str) -> int:
                  (e.g. wrong suite, or instruction contains extra whitespace)
     """
     key = instruction.strip()
+    print(key)
     if key not in TASK_NAME_TO_IDX:
         raise KeyError(
             f"Task instruction not found in {LIBERO_SUITE} map:\n"
