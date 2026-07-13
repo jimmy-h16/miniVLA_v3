@@ -122,20 +122,14 @@ def run_epoch(loader, train: bool) -> float:
             action_gt   = batch["action_chunk"].to(DEVICE)   # [B, T, 7]
             action_mask = batch["action_mask"].to(DEVICE)    # [B, T]
             task_idx    = batch["task_idx"].to(DEVICE)       # [B]  long
-
-            # TextEncoder tokens are built inside MiniVLA.forward in v3;
-            # we pass dummy ids here — replace with real CLIP token ids
-            # once you integrate the tokeniser into the DataLoader.
-            # TODO: integrate CLIP tokenisation into LiberoDataset.__getitem__
-            B = image.shape[0]
-            tokens = torch.zeros(B, 77, dtype=torch.long,  device=DEVICE)
-            mask   = torch.ones( B, 77, dtype=torch.float, device=DEVICE)
+            tokens = batch["tokens"].to(DEVICE, non_blocking=True)          # [B, 77], int64
+            text_mask = batch["text_mask"].to(DEVICE, non_blocking=True)    # [B, 77], float32
 
             pred = model(
                 image=image,
                 wrist_image=wrist_image,
                 tokens=tokens,
-                mask=mask,
+                mask=text_mask,
                 state=state,
                 task_idx=task_idx,
             )  # [B, chunk_size, action_dim]
@@ -164,24 +158,49 @@ for epoch in range(NUM_EPOCHS):
     # ── Backbone stage transitions ─────────────────────────────────────
     if epoch == BACKBONE_STAGE2_EPOCH:
         model.set_backbone_stage(2)
-        # Rebuild optimiser to include newly unfrozen params
-        optimiser = AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=LR * 0.1)
-        print(f"[train3] Epoch {epoch}: backbone stage 2 (layer4 unfrozen, LR={LR*0.1:.2e})")
+
+        optimiser = AdamW(
+            filter(lambda p: p.requires_grad, model.parameters()),
+            lr=LR * 0.1,  # 1e-5
+        )
+        scheduler = CosineAnnealingLR(
+            optimiser,
+            T_max=NUM_EPOCHS - epoch,
+            eta_min=1e-6,
+        )
+
+        print(
+            f"[train3] Epoch {epoch}: backbone stage 2 "
+            f"(layer4 unfrozen, LR={LR * 0.1:.2e})"
+        )
 
     elif epoch == BACKBONE_STAGE3_EPOCH:
         model.set_backbone_stage(3)
-        optimiser = AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=LR * 0.01)
-        print(f"[train3] Epoch {epoch}: backbone stage 3 (full backbone, LR={LR*0.01:.2e})")
 
+        optimiser = AdamW(
+            filter(lambda p: p.requires_grad, model.parameters()),
+            lr=LR * 0.01,  # 1e-6
+        )
+        scheduler = CosineAnnealingLR(
+            optimiser,
+            T_max=NUM_EPOCHS - epoch,
+            eta_min=1e-6,
+        )
+
+        print(
+            f"[train3] Epoch {epoch}: backbone stage 3 "
+            f"(full backbone unfrozen, LR={LR * 0.01:.2e})"
+        )
+
+    # ── Train / val ────────────────────────────────────────────────────
+    train_loss = run_epoch(train_loader, train=True)
+    val_loss   = run_epoch(val_loader,   train=False)
+    
     # ── LR schedule ────────────────────────────────────────────────────
     if epoch < WARMUP_EPOCHS:
         warmup_scheduler.step()
     else:
         scheduler.step()
-
-    # ── Train / val ────────────────────────────────────────────────────
-    train_loss = run_epoch(train_loader, train=True)
-    val_loss   = run_epoch(val_loader,   train=False)
 
     current_lr = optimiser.param_groups[0]["lr"]
     print(f"Epoch {epoch+1:03d}/{NUM_EPOCHS} | "
