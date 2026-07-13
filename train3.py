@@ -11,21 +11,22 @@ import os
 import glob
 import json
 import torch
+import h5py
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from data.task_map import NUM_TASKS, LIBERO_SUITE
 
 from models.mini_vla    import MiniVLA
 from data.libero_dataset import LiberoDataset
-from data.task_map      import NUM_TASKS
+from data.task_map      import NUM_TASKS, get_task_idx
 
 # ── Config ────────────────────────────────────────────────────────────────
 # DATA_DIR      = "./data/libero_10"     # path to your .hdf5 demo files
 
 DATA_DIR  = os.environ.get("LIBERO_DATASET_DIR", os.path.expanduser("~/.robosuite/datasets/datasets/libero_spatial"))
 all_hdf5 = sorted(glob.glob(os.path.join(DATA_DIR, "*.hdf5")))
+TASK_RANGE = range(1)
 
 CHECKPOINT_DIR = "./checkpoints"
 NUM_EPOCHS    = 100
@@ -58,12 +59,41 @@ print(f"[train3] Using device: {DEVICE}")
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
 # ── Data ──────────────────────────────────────────────────────────────────
-all_hdf5 = sorted(glob.glob(os.path.join(DATA_DIR, "*.hdf5")))
-assert len(all_hdf5) > 0, f"No .hdf5 files found in {DATA_DIR}"
-print(f"[train3] Found {len(all_hdf5)} HDF5 files")
+
+assert 0 <= TASK_RANGE.start <= TASK_RANGE.stop <= NUM_TASKS, (
+    f"TASK_RANGE must lie within [0, {NUM_TASKS}], got "
+    f"range({TASK_RANGE.start}, {TASK_RANGE.stop})"
+)
+
+selected_task_indices = set(TASK_RANGE)
+selected_hdf5 = []
+
+for hdf5_path in all_hdf5:
+    with h5py.File(hdf5_path, "r") as f:
+        problem_info = json.loads(f["data"].attrs["problem_info"])
+        instruction = problem_info["language_instruction"]
+        task_idx = get_task_idx(instruction)  # canonical index: 0 to 9
+
+    if task_idx in selected_task_indices:
+        selected_hdf5.append(hdf5_path)
+
+assert len(selected_hdf5) == len(selected_task_indices), (
+    f"Expected {len(selected_task_indices)} selected task files, "
+    f"but found {len(selected_hdf5)}. Check DATA_DIR and task_map.py."
+)
+
+print(
+    f"[train3] Selected canonical task indices: "
+    f"{sorted(selected_task_indices)}"
+)
+
+print("[train3] Selected HDF5 files:")
+for hdf5_path in selected_hdf5:
+    print(f"  {os.path.basename(hdf5_path)}")
+    
 
 full_dataset = LiberoDataset(
-    hdf5_files=all_hdf5,
+    hdf5_files=selected_hdf5,
     chunk_size=CHUNK_SIZE,
     image_size=128,
 )
