@@ -10,9 +10,13 @@
 import os
 import glob
 import json
+import csv
 import torch
 import h5py
 import torch.nn as nn
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, Subset
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -29,7 +33,9 @@ all_hdf5 = sorted(glob.glob(os.path.join(DATA_DIR, "*.hdf5")))
 TASK_RANGE = range(1)
 
 CHECKPOINT_DIR = "./checkpoints"
-NUM_EPOCHS    = 100
+HISTORY_CSV   = os.path.join(CHECKPOINT_DIR, "training_history.csv")
+LOSS_PLOT     = os.path.join(CHECKPOINT_DIR, "training_loss.png")
+NUM_EPOCHS    = 50
 BATCH_SIZE    = 32
 LR            = 1e-4
 LAYER4_LR     = 1e-5
@@ -290,10 +296,51 @@ def run_epoch(loader, train: bool) -> float:
     return total_loss / max(n_batches, 1)
 
 
+def save_training_history(history: list[dict]) -> None:
+    """Atomically save completed epochs as CSV and a train/validation plot."""
+    csv_tmp = HISTORY_CSV + ".tmp"
+    with open(csv_tmp, "w", newline="") as csv_file:
+        writer = csv.DictWriter(
+            csv_file,
+            fieldnames=["epoch", "train_loss", "val_loss", "lr", "backbone_stage"],
+        )
+        writer.writeheader()
+        writer.writerows(history)
+    os.replace(csv_tmp, HISTORY_CSV)
+
+    if not history:
+        return
+
+    epochs = [row["epoch"] for row in history]
+    train_losses = [row["train_loss"] for row in history]
+    val_losses = [row["val_loss"] for row in history]
+
+    figure, axis = plt.subplots(figsize=(9, 5.5))
+    axis.plot(epochs, train_losses, label="Training loss", linewidth=2)
+    axis.plot(epochs, val_losses, label="Validation loss", linewidth=2)
+    axis.set_xlabel("Epoch")
+    axis.set_ylabel("Masked MSE loss")
+    axis.set_title("miniVLA v3 training and validation loss")
+    axis.grid(True, alpha=0.3)
+    axis.legend()
+    if len(epochs) == 1:
+        axis.set_xlim(0.5, 1.5)
+    else:
+        axis.set_xlim(1, epochs[-1])
+    figure.tight_layout()
+
+    plot_tmp = LOSS_PLOT + ".tmp"
+    figure.savefig(plot_tmp, format="png", dpi=160)
+    plt.close(figure)
+    os.replace(plot_tmp, LOSS_PLOT)
+
+
 # ── Main loop ─────────────────────────────────────────────────────────────
 best_val_loss = float("inf")
 best_ckpt_path = os.path.join(CHECKPOINT_DIR, "best_model.pt")
 backbone_stage = "1/frozen"
+history = []
+interrupted = False
 
 header = (
     f"{'Epoch':>9}  {'Train Loss':>11}  {'Val Loss':>10}  "
@@ -309,67 +356,95 @@ print(separator)
 print(header)
 print(separator)
 
-for epoch in range(NUM_EPOCHS):
-    # ── Backbone stage transitions ─────────────────────────────────────
-    if epoch == BACKBONE_STAGE2_EPOCH:
-        model.set_backbone_stage(2)
-        backbone_stage = "2/layer4"
-        print(separator)
-        print(
-            f"[Backbone] Epoch {epoch + 1}: stage 2, layer4 unfrozen "
-            f"(configured lr={LAYER4_LR:.2e})"
+try:
+    for epoch in range(NUM_EPOCHS):
+        # ── Backbone stage transitions ─────────────────────────────────
+        if epoch == BACKBONE_STAGE2_EPOCH:
+            model.set_backbone_stage(2)
+            backbone_stage = "2/layer4"
+            print(separator)
+            print(
+                f"[Backbone] Epoch {epoch + 1}: stage 2, layer4 unfrozen "
+                f"(configured lr={LAYER4_LR:.2e})"
+            )
+            print(separator)
+
+        elif epoch == BACKBONE_STAGE3_EPOCH:
+            model.set_backbone_stage(3)
+            backbone_stage = "3/full"
+            print(separator)
+            print(
+                f"[Backbone] Epoch {epoch + 1}: stage 3, full backbone unfrozen "
+                f"(configured lr={BACKBONE_LR:.2e})"
+            )
+            print(separator)
+
+        # ── Train / val ────────────────────────────────────────────────
+        train_loss = run_epoch(train_loader, train=True)
+        val_loss = run_epoch(val_loader, train=False)
+
+        # ── LR schedule ────────────────────────────────────────────────
+        if epoch < WARMUP_EPOCHS:
+            warmup_scheduler.step()
+        else:
+            scheduler.step()
+
+        # ── Best checkpoint ────────────────────────────────────────────
+        is_best = val_loss < best_val_loss
+        if is_best:
+            best_val_loss = val_loss
+            torch.save(model.state_dict(), best_ckpt_path)
+
+        current_lr = optimiser.param_groups[0]["lr"]
+        history.append(
+            {
+                "epoch": epoch + 1,
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+                "lr": current_lr,
+                "backbone_stage": backbone_stage,
+            }
         )
-        print(separator)
+        save_training_history(history)
 
-    elif epoch == BACKBONE_STAGE3_EPOCH:
-        model.set_backbone_stage(3)
-        backbone_stage = "3/full"
-        print(separator)
+        marker = "yes" if is_best else ""
         print(
-            f"[Backbone] Epoch {epoch + 1}: stage 3, full backbone unfrozen "
-            f"(configured lr={BACKBONE_LR:.2e})"
+            f"{epoch + 1:>3}/{NUM_EPOCHS:<3}  {train_loss:>11.5f}  "
+            f"{val_loss:>10.5f}  {current_lr:>10.2e}  "
+            f"{backbone_stage:>11}  {marker:>6}"
         )
-        print(separator)
 
-    # ── Train / val ────────────────────────────────────────────────────
-    train_loss = run_epoch(train_loader, train=True)
-    val_loss   = run_epoch(val_loader,   train=False)
-    
-    # ── LR schedule ────────────────────────────────────────────────────
-    if epoch < WARMUP_EPOCHS:
-        warmup_scheduler.step()
-    else:
-        scheduler.step()
+        if is_best:
+            print(f"          -> Saved best checkpoint: {best_ckpt_path}")
 
-    # ── Best checkpoint ────────────────────────────────────────────────
-    is_best = val_loss < best_val_loss
-    if is_best:
-        best_val_loss = val_loss
-        torch.save(model.state_dict(), best_ckpt_path)
+        # ── Periodic checkpoint ────────────────────────────────────────
+        if (epoch + 1) % PERIOD == 0:
+            ckpt_path = os.path.join(
+                CHECKPOINT_DIR, f"ckpt_epoch{epoch + 1:03d}.pt"
+            )
+            torch.save(model.state_dict(), ckpt_path)
+            print(f"          -> Periodic checkpoint: {ckpt_path}")
 
-    current_lr = optimiser.param_groups[0]["lr"]
-    marker = "yes" if is_best else ""
-    print(
-        f"{epoch + 1:>3}/{NUM_EPOCHS:<3}  {train_loss:>11.5f}  "
-        f"{val_loss:>10.5f}  {current_lr:>10.2e}  "
-        f"{backbone_stage:>11}  {marker:>6}"
-    )
+except KeyboardInterrupt:
+    interrupted = True
+    save_training_history(history)
+    interrupted_ckpt_path = os.path.join(CHECKPOINT_DIR, "interrupted_model.pt")
+    torch.save(model.state_dict(), interrupted_ckpt_path)
+    print("\n[Stopped] Training interrupted by user.")
+    print(f"  Completed epochs      : {len(history)}")
+    print(f"  Interrupted checkpoint: {interrupted_ckpt_path}")
 
-    if is_best:
-        print(f"          -> Saved best checkpoint: {best_ckpt_path}")
-
-    # ── Periodic checkpoint ────────────────────────────────────────────
-    if (epoch + 1) % PERIOD == 0:
-        ckpt_path = os.path.join(CHECKPOINT_DIR, f"ckpt_epoch{epoch+1:03d}.pt")
-        torch.save(model.state_dict(), ckpt_path)
-        print(f"          -> Periodic checkpoint: {ckpt_path}")
-
-final_ckpt_path = os.path.join(CHECKPOINT_DIR, "final_model.pt")
-torch.save(model.state_dict(), final_ckpt_path)
+if not interrupted:
+    final_ckpt_path = os.path.join(CHECKPOINT_DIR, "final_model.pt")
+    torch.save(model.state_dict(), final_ckpt_path)
 
 print(separator)
-print("\n[Done] Training complete.")
-print(f"  Best val loss   : {best_val_loss:.5f}")
-print(f"  Best checkpoint : {best_ckpt_path}")
-print(f"  Final checkpoint: {final_ckpt_path}")
+print("\n[Done] Training history saved.")
+if history:
+    print(f"  Best val loss   : {best_val_loss:.5f}")
+    print(f"  Best checkpoint : {best_ckpt_path}")
+print(f"  History CSV     : {HISTORY_CSV}")
+print(f"  Loss graph      : {LOSS_PLOT}")
+if not interrupted:
+    print(f"  Final checkpoint: {final_ckpt_path}")
 print("=" * OUTPUT_WIDTH)
