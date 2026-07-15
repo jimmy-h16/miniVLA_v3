@@ -101,7 +101,6 @@ class ResNetSpatialEncoder(nn.Module):
         #layer1,2,3,4 such module network build with sequential
         # [B, 512, 4, 4]
 
-        print(self.backbone(torch.zeros(1,3,128,128)).shape)
         # ── TODO 2: 1×1 Conv projection: 512 → embed_dim ─────────────────────
         # Maps ResNet’s 512-channel feature map to the model’s working dimension.
         # Hint: nn.Conv2d(self.RESNET_CHANNELS, embed_dim, kernel_size=1)

@@ -13,7 +13,7 @@ import json
 import torch
 import h5py
 import torch.nn as nn
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Subset
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
@@ -30,11 +30,15 @@ TASK_RANGE = range(1)
 
 CHECKPOINT_DIR = "./checkpoints"
 NUM_EPOCHS    = 100
-BATCH_SIZE    = 64
+BATCH_SIZE    = 32
 LR            = 1e-4
+LAYER4_LR     = 1e-5
+BACKBONE_LR   = 1e-6
 WARMUP_EPOCHS = 5
 PERIOD        = 10                     # checkpoint every N epochs
-VAL_FRAC      = 0.1
+TRAIN_EPISODES_PER_TASK = 45
+VAL_EPISODES_PER_TASK   = 5
+SPLIT_SEED             = 42
 
 # Backbone freeze schedule (stages applied at these epoch boundaries)
 BACKBONE_STAGE2_EPOCH = 20   # unfreeze layer4 after this many epochs
@@ -54,7 +58,11 @@ elif torch.backends.mps.is_available():
     DEVICE = torch.device("mps")   # M2 Mac fallback
 else:
     DEVICE = torch.device("cpu")
-print(f"[train3] Using device: {DEVICE}")
+
+OUTPUT_WIDTH = 72
+print("=" * OUTPUT_WIDTH)
+print("  miniVLA v3 — Training")
+print("=" * OUTPUT_WIDTH)
 
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
@@ -82,14 +90,9 @@ assert len(selected_hdf5) == len(selected_task_indices), (
     f"but found {len(selected_hdf5)}. Check DATA_DIR and task_map.py."
 )
 
-print(
-    f"[train3] Selected canonical task indices: "
-    f"{sorted(selected_task_indices)}"
-)
-
-print("[train3] Selected HDF5 files:")
-for hdf5_path in selected_hdf5:
-    print(f"  {os.path.basename(hdf5_path)}")
+print(f"\n[Dataset] Found {len(selected_hdf5)} selected task(s):")
+for selection_index, hdf5_path in enumerate(selected_hdf5):
+    print(f"  [{selection_index}] {os.path.basename(hdf5_path)}")
     
 
 full_dataset = LiberoDataset(
@@ -98,9 +101,52 @@ full_dataset = LiberoDataset(
     image_size=128,
 )
 
-val_size   = max(1, int(len(full_dataset) * VAL_FRAC))
-train_size = len(full_dataset) - val_size
-train_ds, val_ds = random_split(full_dataset, [train_size, val_size])
+# Split by complete demonstration episode, not individual timesteps. This
+# prevents adjacent observations from the same rollout leaking into validation.
+split_generator = torch.Generator().manual_seed(SPLIT_SEED)
+train_episode_keys = set()
+val_episode_keys = set()
+
+for hdf5_path in selected_hdf5:
+    episode_keys = sorted({
+        episode_key
+        for sample_path, episode_key, *_ in full_dataset.samples
+        if sample_path == hdf5_path
+    })
+    expected_episodes = TRAIN_EPISODES_PER_TASK + VAL_EPISODES_PER_TASK
+    assert len(episode_keys) == expected_episodes, (
+        f"Expected {expected_episodes} episodes in {os.path.basename(hdf5_path)}, "
+        f"but found {len(episode_keys)}."
+    )
+
+    permutation = torch.randperm(
+        len(episode_keys), generator=split_generator
+    ).tolist()
+    shuffled_keys = [episode_keys[i] for i in permutation]
+
+    train_episode_keys.update(
+        (hdf5_path, key)
+        for key in shuffled_keys[:TRAIN_EPISODES_PER_TASK]
+    )
+    val_episode_keys.update(
+        (hdf5_path, key)
+        for key in shuffled_keys[TRAIN_EPISODES_PER_TASK:]
+    )
+
+train_indices = []
+val_indices = []
+for sample_index, (hdf5_path, episode_key, *_) in enumerate(full_dataset.samples):
+    episode_id = (hdf5_path, episode_key)
+    if episode_id in train_episode_keys:
+        train_indices.append(sample_index)
+    elif episode_id in val_episode_keys:
+        val_indices.append(sample_index)
+
+assert train_episode_keys.isdisjoint(val_episode_keys)
+assert len(train_indices) + len(val_indices) == len(full_dataset)
+
+train_ds = Subset(full_dataset, train_indices)
+val_ds = Subset(full_dataset, val_indices)
 
 train_loader = DataLoader(
     train_ds, batch_size=BATCH_SIZE, shuffle=True,
@@ -110,7 +156,13 @@ val_loader = DataLoader(
     val_ds, batch_size=BATCH_SIZE, shuffle=False,
     num_workers=0, pin_memory=(DEVICE.type == "cuda"),
 )
-print(f"[train3] Train: {len(train_ds)} samples | Val: {len(val_ds)} samples")
+print("\n[Dataset] Episode split per task:")
+print(f"  Train episodes : {TRAIN_EPISODES_PER_TASK}")
+print(f"  Val episodes   : {VAL_EPISODES_PER_TASK}")
+print(f"  Split seed     : {SPLIT_SEED}")
+print("\n[Dataset] Samples after chunking:")
+print(f"  Train : {len(train_ds):,} samples")
+print(f"  Val   : {len(val_ds):,} samples")
 
 # ── Model ─────────────────────────────────────────────────────────────────
 model = MiniVLA(
@@ -125,10 +177,54 @@ model = MiniVLA(
 
 # Stage 1: freeze ResNet backbone at start of training
 model.set_backbone_stage(1)
-print(f"[train3] Backbone stage 1 (frozen). Trainable params: {model.count_parameters():,}")
+print("\n[Model] MiniVLA v3")
+print(f"  Trainable parameters : {model.count_parameters():,}")
+print(f"  Device               : {DEVICE}")
+print("  Backbone stage       : 1 (frozen)")
 
 # ── Optimiser + Scheduler ─────────────────────────────────────────────────
-optimiser = AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=LR)
+# Keep one optimiser for the complete run so AdamW momentum is retained when
+# backbone stages are unfrozen. Parameters with requires_grad=False remain
+# untouched until model.set_backbone_stage() enables them.
+image_encoders = (model.image_encoder, model.wrist_encoder)
+
+layer4_params = []
+early_backbone_params = []
+for encoder in image_encoders:
+    layer4_params.extend(encoder.backbone[-1].parameters())
+    early_backbone_params.extend(encoder.backbone[:-1].parameters())
+
+backbone_param_ids = {
+    id(parameter)
+    for encoder in image_encoders
+    for parameter in encoder.backbone.parameters()
+}
+task_head_params = [
+    parameter
+    for parameter in model.parameters()
+    if id(parameter) not in backbone_param_ids
+]
+
+optimiser = AdamW(
+    [
+        {
+            "name": "task_and_heads",
+            "params": task_head_params,
+            "lr": LR,
+        },
+        {
+            "name": "resnet_layer4",
+            "params": layer4_params,
+            "lr": LAYER4_LR,
+        },
+        {
+            "name": "resnet_early",
+            "params": early_backbone_params,
+            "lr": BACKBONE_LR,
+        },
+    ],
+    weight_decay=1e-2,
+)
 scheduler = CosineAnnealingLR(optimiser, T_max=NUM_EPOCHS - WARMUP_EPOCHS, eta_min=1e-6)
 
 def warmup_lr(epoch: int) -> float:
@@ -138,6 +234,19 @@ def warmup_lr(epoch: int) -> float:
 warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(optimiser, lr_lambda=warmup_lr)
 
 criterion = nn.MSELoss(reduction="none")
+
+print("\n[Scheduler]")
+print(f"  Task, fusion and action LR : {LR:.2e}")
+print(f"  ResNet layer4 LR           : {LAYER4_LR:.2e}")
+print(f"  Earlier ResNet layers LR   : {BACKBONE_LR:.2e}")
+print(
+    f"  Linear warmup ({WARMUP_EPOCHS} epochs) -> "
+    f"cosine annealing ({NUM_EPOCHS - WARMUP_EPOCHS} epochs)"
+)
+print(
+    f"  Backbone stage 2 at epoch {BACKBONE_STAGE2_EPOCH + 1}; "
+    f"stage 3 at epoch {BACKBONE_STAGE3_EPOCH + 1}"
+)
 
 # ── Training helpers ──────────────────────────────────────────────────────
 def run_epoch(loader, train: bool) -> float:
@@ -183,44 +292,44 @@ def run_epoch(loader, train: bool) -> float:
 
 # ── Main loop ─────────────────────────────────────────────────────────────
 best_val_loss = float("inf")
+best_ckpt_path = os.path.join(CHECKPOINT_DIR, "best_model.pt")
+backbone_stage = "1/frozen"
+
+header = (
+    f"{'Epoch':>9}  {'Train Loss':>11}  {'Val Loss':>10}  "
+    f"{'LR':>10}  {'Backbone':>11}  {'Best?':>6}"
+)
+separator = "-" * len(header)
+
+print(
+    f"\n[Training] {NUM_EPOCHS} epochs | batch={BATCH_SIZE} | "
+    f"initial lr={LR:.0e}"
+)
+print(separator)
+print(header)
+print(separator)
 
 for epoch in range(NUM_EPOCHS):
     # ── Backbone stage transitions ─────────────────────────────────────
     if epoch == BACKBONE_STAGE2_EPOCH:
         model.set_backbone_stage(2)
-
-        optimiser = AdamW(
-            filter(lambda p: p.requires_grad, model.parameters()),
-            lr=LR * 0.1,  # 1e-5
-        )
-        scheduler = CosineAnnealingLR(
-            optimiser,
-            T_max=NUM_EPOCHS - epoch,
-            eta_min=1e-6,
-        )
-
+        backbone_stage = "2/layer4"
+        print(separator)
         print(
-            f"[train3] Epoch {epoch}: backbone stage 2 "
-            f"(layer4 unfrozen, LR={LR * 0.1:.2e})"
+            f"[Backbone] Epoch {epoch + 1}: stage 2, layer4 unfrozen "
+            f"(configured lr={LAYER4_LR:.2e})"
         )
+        print(separator)
 
     elif epoch == BACKBONE_STAGE3_EPOCH:
         model.set_backbone_stage(3)
-
-        optimiser = AdamW(
-            filter(lambda p: p.requires_grad, model.parameters()),
-            lr=LR * 0.01,  # 1e-6
-        )
-        scheduler = CosineAnnealingLR(
-            optimiser,
-            T_max=NUM_EPOCHS - epoch,
-            eta_min=1e-6,
-        )
-
+        backbone_stage = "3/full"
+        print(separator)
         print(
-            f"[train3] Epoch {epoch}: backbone stage 3 "
-            f"(full backbone unfrozen, LR={LR * 0.01:.2e})"
+            f"[Backbone] Epoch {epoch + 1}: stage 3, full backbone unfrozen "
+            f"(configured lr={BACKBONE_LR:.2e})"
         )
+        print(separator)
 
     # ── Train / val ────────────────────────────────────────────────────
     train_loss = run_epoch(train_loader, train=True)
@@ -232,21 +341,35 @@ for epoch in range(NUM_EPOCHS):
     else:
         scheduler.step()
 
-    current_lr = optimiser.param_groups[0]["lr"]
-    print(f"Epoch {epoch+1:03d}/{NUM_EPOCHS} | "
-          f"train={train_loss:.4f} | val={val_loss:.4f} | lr={current_lr:.2e}")
-
     # ── Best checkpoint ────────────────────────────────────────────────
-    if val_loss < best_val_loss:
+    is_best = val_loss < best_val_loss
+    if is_best:
         best_val_loss = val_loss
-        torch.save(model.state_dict(),
-                   os.path.join(CHECKPOINT_DIR, "best_model.pt"))
-        print(f"  → New best val loss: {best_val_loss:.4f} (saved)")
+        torch.save(model.state_dict(), best_ckpt_path)
+
+    current_lr = optimiser.param_groups[0]["lr"]
+    marker = "yes" if is_best else ""
+    print(
+        f"{epoch + 1:>3}/{NUM_EPOCHS:<3}  {train_loss:>11.5f}  "
+        f"{val_loss:>10.5f}  {current_lr:>10.2e}  "
+        f"{backbone_stage:>11}  {marker:>6}"
+    )
+
+    if is_best:
+        print(f"          -> Saved best checkpoint: {best_ckpt_path}")
 
     # ── Periodic checkpoint ────────────────────────────────────────────
     if (epoch + 1) % PERIOD == 0:
         ckpt_path = os.path.join(CHECKPOINT_DIR, f"ckpt_epoch{epoch+1:03d}.pt")
         torch.save(model.state_dict(), ckpt_path)
-        print(f"  → Checkpoint saved: {ckpt_path}")
+        print(f"          -> Periodic checkpoint: {ckpt_path}")
 
-print(f"[train3] Training complete. Best val loss: {best_val_loss:.4f}")
+final_ckpt_path = os.path.join(CHECKPOINT_DIR, "final_model.pt")
+torch.save(model.state_dict(), final_ckpt_path)
+
+print(separator)
+print("\n[Done] Training complete.")
+print(f"  Best val loss   : {best_val_loss:.5f}")
+print(f"  Best checkpoint : {best_ckpt_path}")
+print(f"  Final checkpoint: {final_ckpt_path}")
+print("=" * OUTPUT_WIDTH)

@@ -61,7 +61,6 @@ def get_task_idx(instruction: str) -> int:
                  (e.g. wrong suite, or instruction contains extra whitespace)
     """
     key = instruction.strip()
-    print(key)
     if key not in TASK_NAME_TO_IDX:
         raise KeyError(
             f"Task instruction not found in {LIBERO_SUITE} map:\n"

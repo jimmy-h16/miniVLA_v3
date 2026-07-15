@@ -7,8 +7,8 @@
 #
 # v3 differences from v2:
 #   - MiniVLA.forward(...) requires task_idx [B]
-#   - Both camera images are resized to 128x128 and ImageNet-normalised
-#     for the pretrained ResNet18 visual backbones
+#   - Both camera images are resized to 128x128 and ImageNet-normalised,
+#     matching LiberoDataset exactly
 #   - Device is selected automatically: CUDA -> MPS -> CPU
 
 import os
@@ -48,13 +48,13 @@ torch.load = _patched_load
 # Config
 # ---------------------------------------------------------------------------
 TASK_SUITE = "libero_spatial"
-TASK_INDICES = list(range(1))
+TASK_INDICES = list(range(3))
 
-NUM_EPISODES = 50
+NUM_EPISODES = 5
 MAX_STEPS = 300
 
 CHUNK_SIZE = 16
-ACTION_HORIZON = CHUNK_SIZE
+ACTION_HORIZON = 12
 
 SEQ_LEN = 77
 MODEL_IMAGE_SIZE = 128
@@ -73,10 +73,9 @@ STATE_DIM = 8
 ACTION_DIM = 7
 NHEAD = 4
 
-# ImageNet preprocessing required by pretrained ResNet18.
+# Preprocessing expected by the ImageNet-pretrained ResNet18 backbone.
 IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
 IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
-
 
 # ---------------------------------------------------------------------------
 # Device
@@ -124,6 +123,9 @@ def image_to_tensor(image: np.ndarray) -> torch.Tensor:
 
     Output:
         tensor: [1, 3, 128, 128], float32, ImageNet-normalised
+
+    This must match LiberoDataset.load_image(). The current checkpoints were
+    trained without this normalisation and must not be reused after retraining.
     """
     tensor = torch.from_numpy(image.copy()).permute(2, 0, 1).float()
     tensor = tensor.unsqueeze(0) / 255.0

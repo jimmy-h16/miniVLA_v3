@@ -27,14 +27,19 @@ from transformers import CLIPTokenizer
 from data.task_map import get_task_idx
 
 
+# Preprocessing expected by the ImageNet-pretrained ResNet18 backbone.
+IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
+
 class LiberoDataset(Dataset):
     """
     Loads LIBERO HDF5 demonstration files into
     (observation, action_chunk, task_idx, text tokens) tuples.
 
     Observations returned per sample:
-        agentview_rgb   : [3, H, W]  float32, normalised to [0, 1]
-        eye_in_hand_rgb : [3, H, W]  float32, normalised to [0, 1]
+        agentview_rgb   : [3, H, W]  float32, ImageNet-normalised
+        eye_in_hand_rgb : [3, H, W]  float32, ImageNet-normalised
         robot_state     : [state_dim] float32
 
     Text returned per sample:
@@ -134,9 +139,10 @@ class LiberoDataset(Dataset):
 
             # ── Observations at step t ─────────────────────────────────────
             def load_image(key: str) -> torch.Tensor:
-                """Load image, normalise to [0, 1], CHW layout."""
+                """Load RGB image and apply ImageNet normalisation in CHW layout."""
                 img = ep["obs"][key][t]  # [H, W, 3], uint8
                 img = img.astype(np.float32) / 255.0
+                img = (img - IMAGENET_MEAN) / IMAGENET_STD
                 return torch.from_numpy(img).permute(2, 0, 1)  # [3, H, W]
 
             agentview = load_image("agentview_rgb")
