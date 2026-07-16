@@ -58,3 +58,85 @@ pip install transformers
 ```bash
 python train3.py
 ```
+
+## Lessons Learned and Reflection
+
+### 1. Spatial positional embeddings
+
+A standard categorical embedding learns one independent vector for every
+category. If the 16 cells of a `4×4` feature map were treated as unrelated
+categories, the positional embedding would require `16 × 256 = 4,096`
+parameters for an embedding dimension of 256.
+
+This project instead learns separate row and column embeddings. Each row and
+column has a 128-dimensional vector, and the two vectors are concatenated at
+each spatial location:
+
+```text
+position(row=i, col=j) = concat(row_embedding[i], col_embedding[j])
+```
+
+This design has several advantages:
+
+1. **Parameter efficiency.** A `4×4` grid requires only
+   `4 × 128 + 4 × 128 = 1,024` parameters, four times fewer than learning 16
+   independent 256-dimensional vectors.
+2. **Explicit spatial structure.** Cells in the same row share the same row
+   component, while cells in the same column share the same column component.
+   With 16 unrelated categorical vectors, the model is not directly told that
+   two neighboring cells share a row or column.
+3. **Correct parameter sharing with `expand()`.** PyTorch's `expand()` creates
+   broadcasted views of the same row and column parameters; it does not create
+   independent learnable copies. During backpropagation, gradients from every
+   use of a row or column accumulate into its original shared parameter.
+
+The main lesson is that the structure of an embedding should reflect the
+structure of the data. An image grid is two-dimensional, so explicitly
+representing rows and columns provides a more useful inductive bias than
+treating every grid cell as an unrelated category.
+
+### 2. Transforming Conv2d features into embeddings
+
+A convolutional network normally outputs a feature map in `[B, C, H, W]`
+format because convolution operates naturally over channels and spatial
+dimensions. A Transformer instead expects a sequence in `[B, N, C]` format,
+where `N` is the number of tokens and `C` is the feature dimension of each
+token.
+
+For an image feature map, every `(H, W)` location becomes one token, while the
+values across all channels at that location become the token's feature vector.
+The conversion is therefore:
+
+```python
+tokens = feature_map.flatten(2).permute(0, 2, 1)
+```
+
+```text
+[B, C, H, W] -> [B, C, H*W] -> [B, H*W, C]
+```
+
+In this project, the ResNet18 output `[B, 512, 4, 4]` is first projected to
+`[B, 256, 4, 4]` and then rearranged into 16 tokens of 256 features:
+`[B, 16, 256]`. Conceptually, the transpose collects the value from every
+channel at one spatial position into a single token. Positional embeddings are
+then needed because flattening assigns the grid cells a sequence order, but
+sequence order alone does not explicitly preserve their two-dimensional row
+and column relationships.
+
+### 3. Final reflection
+
+The project progressed gradually from v1 to v2 and finally to v3. Each version
+increased the model's spatial perception and improved how visual observations,
+robot state, language, and task identity are fused together. These changes were
+intended to give the policy a stronger understanding of the relationship
+between the gripper, target object, and destination during grasp-and-place
+tasks.
+
+Across these versions, the increase in model complexity was accompanied by an
+increase in robustness and task success. The richer spatial and multimodal
+representations improved the policy's ability to combine different inputs and
+perform grasp-and-place behavior under a wider range of task conditions.
+Overall, v3 provides a stronger foundation for robust single-task behavior and
+for scaling the same policy across multiple tasks, while consistent
+preprocessing, sufficient training data, and responsive closed-loop control
+remain important for realizing the architecture's full capability.
